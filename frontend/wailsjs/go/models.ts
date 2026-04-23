@@ -3,6 +3,7 @@ export namespace main {
 	export class startInfo {
 	    mode: string;
 	    command?: string[];
+	    passthrough: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new startInfo(source);
@@ -12,6 +13,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mode = source["mode"];
 	        this.command = source["command"];
+	        this.passthrough = source["passthrough"];
 	    }
 	}
 

@@ -22,15 +22,19 @@ const channelBuffer = 8192
 
 func main() {
 	lines := make(chan LogLine, channelBuffer)
-	info, wrapArgs := parseMode(os.Args[1:])
+	info, wrapArgs, passthrough := parseMode(os.Args[1:])
 
 	app := NewApp(lines, info)
 
 	switch info.Mode {
 	case "pipe":
-		go readStream(os.Stdin, os.Stdout, "stdin", app, nil)
+		out := io.Writer(os.Stdout)
+		if !passthrough {
+			out = io.Discard
+		}
+		go readStream(os.Stdin, out, "stdin", app, nil)
 	case "wrap":
-		go runWrapped(wrapArgs, app)
+		go runWrapped(wrapArgs, app, passthrough)
 	}
 
 	err := wails.Run(&options.App{
@@ -52,17 +56,27 @@ func main() {
 	}
 }
 
-func parseMode(args []string) (startInfo, []string) {
-	for i, a := range args {
+func parseMode(args []string) (startInfo, []string, bool) {
+	passthrough := true
+	i := 0
+	for i < len(args) {
+		a := args[i]
 		if a == "--" {
-			return startInfo{Mode: "wrap", Command: args[i+1:]}, args[i+1:]
+			return startInfo{Mode: "wrap", Command: args[i+1:], Passthrough: passthrough}, args[i+1:], passthrough
 		}
+		if a == "--no-passthrough" || a == "-q" {
+			passthrough = false
+			i++
+			continue
+		}
+		fmt.Fprintln(os.Stderr, "[logviz] unknown argument:", a)
+		i++
 	}
 	stat, err := os.Stdin.Stat()
 	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		return startInfo{Mode: "pipe"}, nil
+		return startInfo{Mode: "pipe", Passthrough: passthrough}, nil, passthrough
 	}
-	return startInfo{Mode: "idle"}, nil
+	return startInfo{Mode: "idle", Passthrough: passthrough}, nil, passthrough
 }
 
 // readStream copies src → passthrough line-by-line while also pushing each line
@@ -83,7 +97,7 @@ func readStream(src io.Reader, passthrough io.Writer, source string, app *App, d
 	}
 }
 
-func runWrapped(cmdArgs []string, app *App) {
+func runWrapped(cmdArgs []string, app *App, passthrough bool) {
 	if len(cmdArgs) == 0 {
 		fmt.Fprintln(os.Stderr, "[logviz] wrap mode requires a command after --")
 		return
@@ -116,8 +130,14 @@ func runWrapped(cmdArgs []string, app *App) {
 
 	outDone := make(chan struct{})
 	errDone := make(chan struct{})
-	go readStream(stdout, os.Stdout, "stdout", app, outDone)
-	go readStream(stderr, os.Stderr, "stderr", app, errDone)
+	outW := io.Writer(os.Stdout)
+	errW := io.Writer(os.Stderr)
+	if !passthrough {
+		outW = io.Discard
+		errW = io.Discard
+	}
+	go readStream(stdout, outW, "stdout", app, outDone)
+	go readStream(stderr, errW, "stderr", app, errDone)
 
 	<-outDone
 	<-errDone

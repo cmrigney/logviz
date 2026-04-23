@@ -24,8 +24,9 @@ type App struct {
 }
 
 type startInfo struct {
-	Mode    string   `json:"mode"`
-	Command []string `json:"command,omitempty"`
+	Mode        string   `json:"mode"`
+	Command     []string `json:"command,omitempty"`
+	Passthrough bool     `json:"passthrough"`
 }
 
 func NewApp(lines chan LogLine, info startInfo) *App {

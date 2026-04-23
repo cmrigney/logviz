@@ -5,6 +5,7 @@ A desktop log viewer that sits inside a Unix pipeline. Logs stream through to th
 ```
 producer | logviz                # pipe mode
 logviz -- producer arg1 arg2     # wrap mode (keeps stdout / stderr separate)
+logviz -q -- producer arg1       # -q / --no-passthrough: GUI only, skip tee
 ```
 
 ## Features
@@ -16,6 +17,7 @@ logviz -- producer arg1 arg2     # wrap mode (keeps stdout / stderr separate)
 - **Live filtering** — substring or regex, case toggle, per-source chips (stdout / stderr / stdin) with live counts, match highlighting.
 - **Virtualized list** via `@tanstack/react-virtual` — handles hundreds of thousands of lines without choking.
 - **Pause / clear / autoscroll**, plus a dropped-lines badge when the producer outruns the UI.
+- **`-q` / `--no-passthrough`** — suppress the terminal tee and only send logs to the GUI.
 
 ## Requirements
 

@@ -126,6 +126,10 @@ function App() {
           value={query}
           onChange={e => setQuery(e.target.value)}
           title={matcherError ?? ''}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
         />
         <label>
           <input type="checkbox" checked={regex} onChange={e => setRegex(e.target.checked)} />
