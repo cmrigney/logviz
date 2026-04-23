@@ -76,6 +76,7 @@
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 18px;
+  padding-bottom: 16px;
 }
 .log-row {
   padding: 1px 12px 1px 0;
@@ -96,6 +97,15 @@
   flex-shrink: 0;
 }
 .log-text { flex: 1; }
+.dup-count {
+  color: #222;
+  background: #7ca8d6;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  align-self: center;
+  flex-shrink: 0;
+}
 mark {
   background: #d6c07b;
   color: #222;

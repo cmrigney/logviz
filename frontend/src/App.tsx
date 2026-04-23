@@ -2,9 +2,8 @@ import { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 import { StartInfo, Ready } from '../wailsjs/go/main/App'
+import { DedupeIndex, LogLine, ServerLogLine } from './dedupe'
 import './App.css'
-
-type LogLine = { seq: number; source: string; text: string; timeMs: number }
 
 type StartInfoT = { mode: string; command?: string[] }
 
@@ -18,6 +17,7 @@ const SOURCES = ['stdout', 'stderr', 'stdin'] as const
 
 function App() {
   const ringRef = useRef<LogLine[]>([])
+  const dedupeIdxRef = useRef<DedupeIndex>(new DedupeIndex())
   const [tick, setTick] = useState(0)
 
   const [query, setQuery] = useState('')
@@ -25,6 +25,7 @@ function App() {
   const [caseSensitive, setCaseSensitive] = useState(false)
   const [paused, setPaused] = useState(false)
   const [autoscroll, setAutoscroll] = useState(true)
+  const [dedupe, setDedupe] = useState(false)
   const [sources, setSources] = useState<Record<string, boolean>>({
     stdout: true, stderr: true, stdin: true,
   })
@@ -37,11 +38,15 @@ function App() {
   useEffect(() => {
     StartInfo().then(info => setStartInfo(info as StartInfoT)).catch(() => {})
     EventsOn('log:batch', (...args: unknown[]) => {
-      const batch = args[0] as LogLine[]
+      const batch = args[0] as ServerLogLine[]
       if (pausedRef.current) return
       const ring = ringRef.current
-      for (const line of batch) ring.push(line)
-      if (ring.length > MAX_LINES) ring.splice(0, ring.length - MAX_LINES)
+      const dedupeIdx = dedupeIdxRef.current
+      for (const raw of batch) ring.push(dedupeIdx.attach(raw))
+      if (ring.length > MAX_LINES) {
+        const evicted = ring.splice(0, ring.length - MAX_LINES)
+        dedupeIdx.evict(evicted)
+      }
       setTick(t => t + 1)
     })
     EventsOn('log:dropped', (...args: unknown[]) => {
@@ -70,9 +75,11 @@ function App() {
   const filtered = useMemo(() => {
     void tick
     const ring = ringRef.current
+    const dedupeIdx = dedupeIdxRef.current
     const out: LogLine[] = []
     for (const line of ring) {
       if (!sources[line.source]) continue
+      if (dedupe && !dedupeIdx.isRepresentative(line)) continue
       if (matcher) {
         if (matcher.kind === 'regex') {
           matcher.re.lastIndex = 0
@@ -85,7 +92,7 @@ function App() {
       out.push(line)
     }
     return out
-  }, [tick, matcher, sources])
+  }, [tick, matcher, sources, dedupe])
 
   const sourceCounts = useMemo(() => {
     void tick
@@ -110,6 +117,7 @@ function App() {
 
   const clear = () => {
     ringRef.current = []
+    dedupeIdxRef.current.clear()
     setTick(t => t + 1)
   }
 
@@ -161,6 +169,10 @@ function App() {
           <input type="checkbox" checked={autoscroll} onChange={e => setAutoscroll(e.target.checked)} />
           autoscroll
         </label>
+        <label>
+          <input type="checkbox" checked={dedupe} onChange={e => setDedupe(e.target.checked)} />
+          dedupe
+        </label>
         <span className="stats">
           <span className="mode-badge">{startInfo.mode}</span>
           {' '}
@@ -184,6 +196,7 @@ function App() {
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map(v => {
               const line = filtered[v.index]
+              const dupCount = dedupe ? dedupeIdxRef.current.countFor(line) : 1
               return (
                 <div
                   key={v.key}
@@ -198,6 +211,7 @@ function App() {
                   }}
                 >
                   <span className="seq">{line.seq}</span>
+                  {dupCount > 1 && <span className="dup-count" title={`${dupCount} occurrences`}>×{dupCount}</span>}
                   <span className="log-text">
                     <Highlighted text={line.text} matcher={matcher} />
                   </span>
