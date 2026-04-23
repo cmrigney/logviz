@@ -1,0 +1,124 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #1b1e26;
+  border-bottom: 1px solid #2a2d36;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.toolbar .search {
+  flex: 0 0 260px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #0f1116;
+  color: #e8e8e8;
+  border: 1px solid #2a2d36;
+  font-family: inherit;
+  outline: none;
+}
+.toolbar .search:focus { border-color: #4a6dbf; }
+.toolbar .search.invalid { border-color: #c06070; }
+
+.toolbar button {
+  background: #242834;
+  color: #d8d8d8;
+  border: 1px solid #2a2d36;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+.toolbar button:hover { background: #2e3340; }
+
+.toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  user-select: none;
+  cursor: pointer;
+}
+
+.chips { display: flex; gap: 4px; }
+.chip {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.chip-stdout.on { border-color: #888; }
+.chip-stderr.on { border-color: #c06070; color: #ffb0b8; }
+.chip-stdin.on  { border-color: #6088d0; color: #b0c8ff; }
+.chip.off { opacity: 0.4; }
+
+.stats { margin-left: auto; color: #888; font-size: 12px; }
+.dropped { color: #ff8080; }
+.mode-badge {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #242834;
+  color: #8fa;
+}
+
+.log-list {
+  flex: 1;
+  overflow: auto;
+  background: #0f1116;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+}
+.log-row {
+  padding: 1px 12px 1px 0;
+  white-space: pre;
+  display: flex;
+  gap: 8px;
+  border-left: 3px solid transparent;
+  box-sizing: border-box;
+}
+.log-row-stdout { border-left-color: #555; }
+.log-row-stderr { border-left-color: #c06070; background: rgba(192, 96, 112, 0.05); }
+.log-row-stdin  { border-left-color: #6088d0; }
+.seq {
+  color: #555;
+  min-width: 7ch;
+  text-align: right;
+  padding-left: 8px;
+  flex-shrink: 0;
+}
+.log-text { flex: 1; }
+mark {
+  background: #d6c07b;
+  color: #222;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: #666;
+  font-size: 13px;
+  padding: 40px;
+  text-align: center;
+  gap: 12px;
+}
+.empty-state code {
+  background: #242834;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #d8d8d8;
+}
