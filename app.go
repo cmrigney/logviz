@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,12 +16,23 @@ type LogLine struct {
 	TimeMs int64  `json:"timeMs"`
 }
 
+const (
+	maxBacklog = 100_000 // cap the replay buffer; drop oldest past this
+	emitChunk  = 2048    // max lines per emitted batch
+)
+
 type App struct {
 	ctx       context.Context
-	lines     chan LogLine
-	dropped   atomic.Uint64
-	seq       atomic.Uint64
 	startInfo startInfo
+
+	mu  sync.Mutex
+	buf []LogLine
+
+	dropped atomic.Uint64
+	seq     atomic.Uint64
+
+	readyCh   chan struct{}
+	readyOnce sync.Once
 }
 
 type startInfo struct {
@@ -29,8 +41,11 @@ type startInfo struct {
 	Passthrough bool     `json:"passthrough"`
 }
 
-func NewApp(lines chan LogLine, info startInfo) *App {
-	return &App{lines: lines, startInfo: info}
+func NewApp(info startInfo) *App {
+	return &App{
+		startInfo: info,
+		readyCh:   make(chan struct{}),
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -42,6 +57,13 @@ func (a *App) StartInfo() startInfo {
 	return a.startInfo
 }
 
+// Ready is called by the frontend once its EventsOn listeners are registered.
+// Until this fires, the emit loop buffers logs instead of firing events that
+// would be dropped by an un-mounted webview.
+func (a *App) Ready() {
+	a.readyOnce.Do(func() { close(a.readyCh) })
+}
+
 func (a *App) push(source, text string) {
 	line := LogLine{
 		Seq:    a.seq.Add(1),
@@ -49,38 +71,58 @@ func (a *App) push(source, text string) {
 		Text:   text,
 		TimeMs: time.Now().UnixMilli(),
 	}
-	select {
-	case a.lines <- line:
-	default:
-		a.dropped.Add(1)
+	a.mu.Lock()
+	a.buf = append(a.buf, line)
+	if over := len(a.buf) - maxBacklog; over > 0 {
+		a.dropped.Add(uint64(over))
+		a.buf = append(a.buf[:0], a.buf[over:]...)
+	}
+	a.mu.Unlock()
+}
+
+func (a *App) drain() []LogLine {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.buf) == 0 {
+		return nil
+	}
+	out := a.buf
+	a.buf = nil
+	return out
+}
+
+func (a *App) emitBatch(batch []LogLine) {
+	for i := 0; i < len(batch); i += emitChunk {
+		end := i + emitChunk
+		if end > len(batch) {
+			end = len(batch)
+		}
+		runtime.EventsEmit(a.ctx, "log:batch", batch[i:end])
 	}
 }
 
 func (a *App) emitLoop() {
+	select {
+	case <-a.readyCh:
+	case <-a.ctx.Done():
+		return
+	}
+
+	// Flush any backlog accumulated before the UI was ready.
+	if batch := a.drain(); batch != nil {
+		a.emitBatch(batch)
+	}
+
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-	batch := make([]LogLine, 0, 256)
 	lastDropped := uint64(0)
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
-		case line, ok := <-a.lines:
-			if !ok {
-				if len(batch) > 0 {
-					runtime.EventsEmit(a.ctx, "log:batch", batch)
-				}
-				return
-			}
-			batch = append(batch, line)
-			if len(batch) >= 1024 {
-				runtime.EventsEmit(a.ctx, "log:batch", batch)
-				batch = batch[:0]
-			}
 		case <-ticker.C:
-			if len(batch) > 0 {
-				runtime.EventsEmit(a.ctx, "log:batch", batch)
-				batch = batch[:0]
+			if batch := a.drain(); batch != nil {
+				a.emitBatch(batch)
 			}
 			if d := a.dropped.Load(); d != lastDropped {
 				runtime.EventsEmit(a.ctx, "log:dropped", d)

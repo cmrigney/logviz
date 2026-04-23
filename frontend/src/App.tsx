@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
-import { StartInfo } from '../wailsjs/go/main/App'
+import { StartInfo, Ready } from '../wailsjs/go/main/App'
 import './App.css'
 
 type LogLine = { seq: number; source: string; text: string; timeMs: number }
@@ -47,6 +47,8 @@ function App() {
     EventsOn('log:dropped', (...args: unknown[]) => {
       setDropped(args[0] as number)
     })
+    // Signal Go that listeners are registered so it flushes its backlog.
+    Ready().catch(() => {})
     return () => {
       EventsOff('log:batch')
       EventsOff('log:dropped')

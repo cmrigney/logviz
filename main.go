@@ -18,13 +18,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-const channelBuffer = 8192
-
 func main() {
-	lines := make(chan LogLine, channelBuffer)
 	info, wrapArgs, passthrough := parseMode(os.Args[1:])
 
-	app := NewApp(lines, info)
+	app := NewApp(info)
 
 	switch info.Mode {
 	case "pipe":
