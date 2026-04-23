@@ -17,7 +17,7 @@ type LogLine struct {
 }
 
 const (
-	maxBacklog = 100_000 // cap the replay buffer; drop oldest past this
+	maxBacklog = 500_000 // cap the replay buffer; drop oldest past this
 	emitChunk  = 2048    // max lines per emitted batch
 )
 

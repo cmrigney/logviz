@@ -12,7 +12,7 @@ type Matcher =
   | { kind: 'substr'; needle: string; caseSensitive: boolean }
   | null
 
-const MAX_LINES = 100_000
+const MAX_LINES = 500_000
 const SOURCES = ['stdout', 'stderr', 'stdin'] as const
 
 function App() {
