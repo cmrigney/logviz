@@ -33,6 +33,8 @@ type App struct {
 
 	readyCh   chan struct{}
 	readyOnce sync.Once
+
+	plugins *pluginManager
 }
 
 type startInfo struct {
@@ -49,6 +51,7 @@ func NewApp(info startInfo) *App {
 }
 
 func (a *App) startup(ctx context.Context) {
+	a.plugins = startPlugins(ctx)
 	a.ctx = ctx
 	go a.emitLoop()
 }
@@ -71,6 +74,7 @@ func (a *App) push(source, text string) {
 		Text:   text,
 		TimeMs: time.Now().UnixMilli(),
 	}
+	a.plugins.dispatch(line)
 	a.mu.Lock()
 	a.buf = append(a.buf, line)
 	if over := len(a.buf) - maxBacklog; over > 0 {

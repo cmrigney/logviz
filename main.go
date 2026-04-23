@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"fmt"
 	"io"
@@ -43,11 +44,11 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 20, G: 22, B: 28, A: 1},
 		OnStartup:        app.startup,
+		OnShutdown:       func(context.Context) { app.plugins.stop() },
 		Bind: []interface{}{
 			app,
 		},
 	})
-
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[logviz] error:", err)
 	}

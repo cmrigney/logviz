@@ -52,6 +52,29 @@ logviz -- ping -c 20 1.1.1.1
 
 To uninstall: `rm /usr/local/bin/logviz`.
 
+## Plugins
+
+Drop an executable into `~/.config/logviz/plugins/` or `./plugins/` (relative to where logviz is launched). Both dirs are scanned at startup and merged. Each plugin is spawned as a long-running subprocess and receives every log line as NDJSON on stdin:
+
+```
+{"seq":1,"source":"stdout","text":"hello","timeMs":1713900000000}
+```
+
+Node scripts (`.js` / `.mjs` / `.cjs`) are first-class — no shebang or `chmod +x` needed. Other extensions must have the executable bit set. Plugin `stderr` is tagged with `[plugin:<name>]` and forwarded to logviz's stderr.
+
+Minimal example (`~/.config/logviz/plugins/save-errors.js`):
+
+```js
+const fs = require('node:fs');
+const readline = require('node:readline');
+readline.createInterface({ input: process.stdin }).on('line', (l) => {
+  const log = JSON.parse(l);
+  if (log.source === 'stderr') fs.appendFileSync('/tmp/errors.log', log.text + '\n');
+});
+```
+
+See [`plugins/`](./plugins) in this repo for more examples.
+
 ## Development
 
 ```sh
