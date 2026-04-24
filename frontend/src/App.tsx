@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
+import React, { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 import { StartInfo, Ready } from '../wailsjs/go/main/App'
 import { DedupeIndex, LogLine, ServerLogLine } from './dedupe'
+import { JsonPretty, tryParseJson } from './JsonPretty'
 import './App.css'
 
 type StartInfoT = { mode: string; command?: string[] }
@@ -11,6 +12,9 @@ type Matcher =
   | { kind: 'regex'; re: RegExp }
   | { kind: 'substr'; needle: string; caseSensitive: boolean }
   | null
+
+// Fix 6: type for memoized filtered rows that carry pre-parsed JSON
+type FilteredRow = { line: LogLine; parsed: unknown }
 
 const MAX_LINES = 500_000
 const SOURCES = ['stdout', 'stderr', 'stdin'] as const
@@ -26,6 +30,7 @@ function App() {
   const [paused, setPaused] = useState(false)
   const [autoscroll, setAutoscroll] = useState(true)
   const [dedupe, setDedupe] = useState(false)
+  const [prettyJson, setPrettyJson] = useState(true)
   const [sources, setSources] = useState<Record<string, boolean>>({
     stdout: true, stderr: true, stdin: true,
   })
@@ -72,11 +77,12 @@ function App() {
     return [{ kind: 'substr', needle: caseSensitive ? query : query.toLowerCase(), caseSensitive }, null]
   }, [query, regex, caseSensitive])
 
-  const filtered = useMemo(() => {
+  // Fix 6: parse JSON once here, not on every scroll in the render map
+  const filtered = useMemo<FilteredRow[]>(() => {
     void tick
     const ring = ringRef.current
     const dedupeIdx = dedupeIdxRef.current
-    const out: LogLine[] = []
+    const out: FilteredRow[] = []
     for (const line of ring) {
       if (!sources[line.source]) continue
       if (dedupe && !dedupeIdx.isRepresentative(line)) continue
@@ -89,7 +95,7 @@ function App() {
           if (!t.includes(matcher.needle)) continue
         }
       }
-      out.push(line)
+      out.push({ line, parsed: tryParseJson(line.text) })
     }
     return out
   }, [tick, matcher, sources, dedupe])
@@ -105,8 +111,9 @@ function App() {
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 20,
+    estimateSize: (i) => prettyJson && filtered[i]?.parsed !== null ? 120 : 20,
     overscan: 30,
+    // Fix 3: no custom measureElement option — use default ResizeObserver/offsetHeight
   })
 
   useEffect(() => {
@@ -173,6 +180,10 @@ function App() {
           <input type="checkbox" checked={dedupe} onChange={e => setDedupe(e.target.checked)} />
           dedupe
         </label>
+        <label>
+          <input type="checkbox" checked={prettyJson} onChange={e => setPrettyJson(e.target.checked)} />
+          pretty JSON
+        </label>
         <span className="stats">
           <span className="mode-badge">{startInfo.mode}</span>
           {' '}
@@ -195,11 +206,13 @@ function App() {
         <div ref={parentRef} className="log-list">
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map(v => {
-              const line = filtered[v.index]
+              const { line, parsed } = filtered[v.index]
               const dupCount = dedupe ? dedupeIdxRef.current.countFor(line) : 1
               return (
                 <div
                   key={v.key}
+                  data-index={v.index}
+                  ref={virtualizer.measureElement}
                   className={`log-row log-row-${line.source}`}
                   style={{
                     position: 'absolute',
@@ -207,13 +220,24 @@ function App() {
                     left: 0,
                     right: 0,
                     transform: `translateY(${v.start}px)`,
-                    height: v.size,
                   }}
                 >
                   <span className="seq">{line.seq}</span>
                   {dupCount > 1 && <span className="dup-count" title={`${dupCount} occurrences`}>×{dupCount}</span>}
                   <span className="log-text">
-                    <Highlighted text={line.text} matcher={matcher} />
+                    {prettyJson && parsed !== null
+                      ? (
+                        <>
+                          <JsonPretty parsed={parsed} />
+                          {matcher !== null && (
+                            <div className="json-match-strip">
+                              <Highlighted text={line.text} matcher={matcher} />
+                            </div>
+                          )}
+                        </>
+                      )
+                      : <Highlighted text={line.text} matcher={matcher} />
+                    }
                   </span>
                 </div>
               )
