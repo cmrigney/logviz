@@ -1,0 +1,16 @@
+{
+  "protocol": 1,
+  "description": "Watch logs for 'Authorization: Bearer <token>' and write it into the configured MCP server entry.",
+  "configSchema": {
+    "serverName": {
+      "type": "string",
+      "default": "dev-server-gateway",
+      "description": "Entry under mcpServers to update"
+    },
+    "mcpPath": {
+      "type": "string",
+      "default": "~/.cursor/mcp.json",
+      "description": "Path to the Cursor MCP config file (supports ~)"
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 import { StartInfo, Ready } from '../wailsjs/go/main/App'
 import { DedupeIndex, LogLine, ServerLogLine } from './dedupe'
+import { PluginsModal } from './Plugins'
 import { JsonPretty, tryParseJson } from './JsonPretty'
 import './App.css'
 
@@ -36,6 +37,7 @@ function App() {
   })
   const [dropped, setDropped] = useState(0)
   const [startInfo, setStartInfo] = useState<StartInfoT>({ mode: 'idle' })
+  const [showPlugins, setShowPlugins] = useState(false)
 
   const pausedRef = useRef(paused)
   pausedRef.current = paused
@@ -190,7 +192,11 @@ function App() {
           {filtered.length.toLocaleString()} / {totalLines.toLocaleString()}
           {dropped > 0 && <> · <span className="dropped">{dropped.toLocaleString()} dropped</span></>}
         </span>
+        <button className="plugins-btn" onClick={() => setShowPlugins(true)} title="Plugin settings">
+          plugins ⚙
+        </button>
       </header>
+      {showPlugins && <PluginsModal onClose={() => setShowPlugins(false)} />}
 
       {showEmpty ? (
         <div className="empty-state">

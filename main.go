@@ -44,7 +44,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 20, G: 22, B: 28, A: 1},
 		OnStartup:        app.startup,
-		OnShutdown:       func(context.Context) { app.plugins.stop() },
+		OnShutdown: func(context.Context) { app.plugins.stop() },
 		Bind: []interface{}{
 			app,
 		},

@@ -14,38 +14,88 @@ import (
 	"time"
 )
 
+// pluginManifest is the optional <name>.json sibling file describing a plugin.
+type pluginManifest struct {
+	Protocol     int                    `json:"protocol"`
+	Description  string                 `json:"description"`
+	ConfigSchema map[string]ConfigField `json:"configSchema"`
+}
+
+// pluginSpec holds all information needed to launch a plugin.
+//
+// id is the stable, unique key for this plugin — the absolute path of the
+// plugin file. It is used as the map key in the config file and in all API
+// calls so that two plugins with the same filename in different directories
+// do not collide.
+//
+// name is the display-only basename (e.g. "foo.js").
+type pluginSpec struct {
+	id           string // absolute path — stable unique key
+	name         string // basename — display only
+	cmd          string
+	args         []string
+	enabled      bool
+	config       map[string]string
+	protocol     int // 0 = legacy bare LogLine, 1 = envelope
+	description  string
+	configSchema map[string]ConfigField
+}
+
+// plugin is a running plugin subprocess.
 type plugin struct {
-	name       string
+	id         string // mirrors spec.id
+	name       string // mirrors spec.name (display)
 	ch         chan LogLine
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
 	done       chan struct{} // closed when the subprocess exits
 	warnedDrop sync.Once
+	protocol   int
+	config     map[string]string
 }
 
+// pluginManager owns all running plugins and their discovery specs.
 type pluginManager struct {
-	plugins []*plugin
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-}
-
-type pluginSpec struct {
-	name string
-	cmd  string
-	args []string
+	mu       sync.Mutex
+	plugins  []*plugin
+	allSpecs []pluginSpec // all discovered specs, including disabled ones
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	ctx      context.Context
 }
 
 func startPlugins(ctx context.Context) *pluginManager {
 	specs := discoverPlugins()
+	// Apply persisted config.
+	cfg, err := loadPluginConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[plugin-config] load error: %v\n", err)
+		cfg = &pluginConfigFile{Version: 1, Plugins: make(map[string]pluginConfigEntry)}
+	}
+	for i, spec := range specs {
+		entry := cfg.entryFor(spec.id)
+		specs[i].enabled = entry.Enabled
+		specs[i].config = entry.Config
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
-	pm := &pluginManager{cancel: cancel}
+	pm := &pluginManager{
+		cancel:   cancel,
+		ctx:      ctx,
+		allSpecs: specs,
+	}
 	for _, spec := range specs {
+		if !spec.enabled {
+			continue
+		}
 		p, err := launchPlugin(ctx, spec, &pm.wg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[plugin:%s] failed to start: %v\n", spec.name, err)
 			continue
 		}
+		pm.mu.Lock()
 		pm.plugins = append(pm.plugins, p)
+		pm.mu.Unlock()
 	}
 	return pm
 }
@@ -64,32 +114,59 @@ func scanPluginDir(dir string) []pluginSpec {
 	if err != nil {
 		return nil
 	}
+	// Resolve dir to an absolute path so that spec.id values are stable
+	// regardless of the working directory at discovery time.
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
 	var specs []pluginSpec
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") || e.IsDir() {
 			continue
 		}
-		spec, ok := resolvePlugin(filepath.Join(dir, name), name, e)
+		// Skip manifest files — they are handled alongside their plugin file.
+		if strings.HasSuffix(name, ".json") {
+			continue
+		}
+		absPath := filepath.Join(absDir, name)
+		spec, ok := resolvePlugin(absPath, name, e)
 		if !ok {
 			continue
 		}
+		// Attempt to load sibling manifest.
+		manifestPath := filepath.Join(absDir, name+".json")
+		if data, err := os.ReadFile(manifestPath); err == nil {
+			var m pluginManifest
+			if jsonErr := json.Unmarshal(data, &m); jsonErr == nil {
+				spec.protocol = m.Protocol
+				spec.description = m.Description
+				spec.configSchema = m.ConfigSchema
+			} else {
+				fmt.Fprintf(os.Stderr, "[plugin:%s] invalid manifest: %v\n", name, jsonErr)
+			}
+		}
+		// Default enabled = true (overridden by persisted config in startPlugins).
+		spec.enabled = true
 		specs = append(specs, spec)
 	}
 	return specs
 }
 
-func resolvePlugin(path, name string, e os.DirEntry) (pluginSpec, bool) {
+// resolvePlugin builds a pluginSpec for the file at absPath with basename name.
+// absPath must already be absolute.
+func resolvePlugin(absPath, name string, e os.DirEntry) (pluginSpec, bool) {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".js", ".mjs", ".cjs":
-		return pluginSpec{name: name, cmd: "node", args: []string{path}}, true
+		return pluginSpec{id: absPath, name: name, cmd: "node", args: []string{absPath}}, true
 	}
 	info, err := e.Info()
 	if err != nil {
 		return pluginSpec{}, false
 	}
 	if info.Mode()&0o111 != 0 {
-		return pluginSpec{name: name, cmd: path}, true
+		return pluginSpec{id: absPath, name: name, cmd: absPath}, true
 	}
 	return pluginSpec{}, false
 }
@@ -111,11 +188,14 @@ func launchPlugin(ctx context.Context, spec pluginSpec, wg *sync.WaitGroup) (*pl
 		return nil, err
 	}
 	p := &plugin{
-		name:  spec.name,
-		ch:    make(chan LogLine, 1024),
-		cmd:   cmd,
-		stdin: stdin,
-		done:  make(chan struct{}),
+		id:       spec.id,
+		name:     spec.name,
+		ch:       make(chan LogLine, 1024),
+		cmd:      cmd,
+		stdin:    stdin,
+		done:     make(chan struct{}),
+		protocol: spec.protocol,
+		config:   spec.config,
 	}
 	wg.Add(3)
 	go func() {
@@ -145,9 +225,41 @@ func pumpStderr(name string, r io.Reader) {
 	}
 }
 
+// envelopeHello is the first message sent to protocol ≥ 1 plugins.
+type envelopeHello struct {
+	Type     string            `json:"type"`
+	Protocol int               `json:"protocol"`
+	Plugin   string            `json:"plugin"`
+	Config   map[string]string `json:"config"`
+}
+
+// envelopeLog wraps a LogLine for protocol ≥ 1 plugins.
+type envelopeLog struct {
+	Type string  `json:"type"`
+	Line LogLine `json:"line"`
+}
+
 func writePlugin(ctx context.Context, p *plugin) {
 	defer p.stdin.Close()
 	enc := json.NewEncoder(p.stdin)
+
+	// For protocol ≥ 1, send the hello message first.
+	if p.protocol >= 1 {
+		cfg := p.config
+		if cfg == nil {
+			cfg = make(map[string]string)
+		}
+		hello := envelopeHello{
+			Type:     "hello",
+			Protocol: p.protocol,
+			Plugin:   p.name, // send display name in hello, not path
+			Config:   cfg,
+		}
+		if err := enc.Encode(hello); err != nil {
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -155,7 +267,13 @@ func writePlugin(ctx context.Context, p *plugin) {
 		case <-p.done:
 			return
 		case line := <-p.ch:
-			if err := enc.Encode(line); err != nil {
+			var err error
+			if p.protocol >= 1 {
+				err = enc.Encode(envelopeLog{Type: "log", Line: line})
+			} else {
+				err = enc.Encode(line)
+			}
+			if err != nil {
 				return
 			}
 		}
@@ -166,7 +284,11 @@ func (pm *pluginManager) dispatchBatch(lines []LogLine) {
 	if pm == nil {
 		return
 	}
-	for _, p := range pm.plugins {
+	pm.mu.Lock()
+	snapshot := make([]*plugin, len(pm.plugins))
+	copy(snapshot, pm.plugins)
+	pm.mu.Unlock()
+	for _, p := range snapshot {
 		for _, line := range lines {
 			select {
 			case p.ch <- line:
@@ -183,7 +305,10 @@ func (pm *pluginManager) stop() {
 	if pm == nil {
 		return
 	}
-	for _, p := range pm.plugins {
+	pm.mu.Lock()
+	plugins := pm.plugins
+	pm.mu.Unlock()
+	for _, p := range plugins {
 		_ = p.stdin.Close()
 	}
 	done := make(chan struct{})
@@ -196,4 +321,107 @@ func (pm *pluginManager) stop() {
 	case <-time.After(2 * time.Second):
 	}
 	pm.cancel()
+}
+
+// stopPlugin closes a single plugin's stdin and waits up to 2 s for it to exit.
+// If the process has not exited by then it is forcibly killed, ensuring the old
+// process is always gone before a replacement is launched.
+func (pm *pluginManager) stopPlugin(p *plugin) {
+	_ = p.stdin.Close()
+	select {
+	case <-p.done:
+		// exited cleanly
+	case <-time.After(2 * time.Second):
+		// Timed out — kill the process so it cannot outlive this call.
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		// Wait for done to be closed (the Wait goroutine will close it promptly
+		// after Kill returns an error, which is expected and ignored there).
+		<-p.done
+	}
+}
+
+// restartPlugin stops the plugin with the given id (if running) and relaunches
+// it if enabled. The spec in allSpecs is used (which reflects any config changes).
+// id is the full absolute path of the plugin file.
+func (pm *pluginManager) restartPlugin(id string) error {
+	pm.mu.Lock()
+	// Find the spec by id.
+	var spec *pluginSpec
+	for i := range pm.allSpecs {
+		if pm.allSpecs[i].id == id {
+			spec = &pm.allSpecs[i]
+			break
+		}
+	}
+	if spec == nil {
+		pm.mu.Unlock()
+		return fmt.Errorf("plugin %q not found", id)
+	}
+	specCopy := *spec
+
+	// Find and remove the existing running plugin, building a fresh backing
+	// array so that any snapshot already held by dispatchBatch is unaffected.
+	var existing *plugin
+	newPlugins := make([]*plugin, 0, len(pm.plugins))
+	for _, p := range pm.plugins {
+		if p.id == id {
+			existing = p
+		} else {
+			newPlugins = append(newPlugins, p)
+		}
+	}
+	pm.plugins = newPlugins
+	pm.mu.Unlock()
+
+	// Stop the existing plugin outside the lock.
+	if existing != nil {
+		pm.stopPlugin(existing)
+	}
+
+	// Relaunch if enabled. Guard against a concurrent restartPlugin call that
+	// may have already added a new instance for this id.
+	if specCopy.enabled {
+		p, err := launchPlugin(pm.ctx, specCopy, &pm.wg)
+		if err != nil {
+			return fmt.Errorf("relaunch plugin %q: %w", id, err)
+		}
+		pm.mu.Lock()
+		// Double-launch guard: if another goroutine already added an instance
+		// for this id while we were launching, discard ours.
+		alreadyPresent := false
+		for _, existing := range pm.plugins {
+			if existing.id == id {
+				alreadyPresent = true
+				break
+			}
+		}
+		if alreadyPresent {
+			pm.mu.Unlock()
+			// Cleanly discard the redundant process we just started.
+			pm.stopPlugin(p)
+		} else {
+			pm.plugins = append(pm.plugins, p)
+			pm.mu.Unlock()
+		}
+	}
+	return nil
+}
+
+// isRunning reports whether the plugin with the given id is currently running.
+func (pm *pluginManager) isRunning(id string) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	for _, p := range pm.plugins {
+		if p.id == id {
+			select {
+			case <-p.done:
+				return false
+			default:
+				return true
+			}
+		}
+	}
+	return false
 }
