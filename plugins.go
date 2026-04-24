@@ -15,11 +15,12 @@ import (
 )
 
 type plugin struct {
-	name  string
-	ch    chan LogLine
-	cmd   *exec.Cmd
-	stdin io.WriteCloser
-	done  chan struct{} // closed when the subprocess exits
+	name       string
+	ch         chan LogLine
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	done       chan struct{} // closed when the subprocess exits
+	warnedDrop sync.Once
 }
 
 type pluginManager struct {
@@ -111,7 +112,7 @@ func launchPlugin(ctx context.Context, spec pluginSpec, wg *sync.WaitGroup) (*pl
 	}
 	p := &plugin{
 		name:  spec.name,
-		ch:    make(chan LogLine, 256),
+		ch:    make(chan LogLine, 1024),
 		cmd:   cmd,
 		stdin: stdin,
 		done:  make(chan struct{}),
@@ -161,14 +162,19 @@ func writePlugin(ctx context.Context, p *plugin) {
 	}
 }
 
-func (pm *pluginManager) dispatch(line LogLine) {
+func (pm *pluginManager) dispatchBatch(lines []LogLine) {
 	if pm == nil {
 		return
 	}
 	for _, p := range pm.plugins {
-		select {
-		case p.ch <- line:
-		default:
+		for _, line := range lines {
+			select {
+			case p.ch <- line:
+			default:
+				p.warnedDrop.Do(func() {
+					fmt.Fprintf(os.Stderr, "[plugin:%s] dropping lines (channel full); further drops silent\n", p.name)
+				})
+			}
 		}
 	}
 }

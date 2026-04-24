@@ -51,8 +51,8 @@ func NewApp(info startInfo) *App {
 }
 
 func (a *App) startup(ctx context.Context) {
-	a.plugins = startPlugins(ctx)
 	a.ctx = ctx
+	a.plugins = startPlugins(ctx)
 	go a.emitLoop()
 }
 
@@ -74,7 +74,6 @@ func (a *App) push(source, text string) {
 		Text:   text,
 		TimeMs: time.Now().UnixMilli(),
 	}
-	a.plugins.dispatch(line)
 	a.mu.Lock()
 	a.buf = append(a.buf, line)
 	if over := len(a.buf) - maxBacklog; over > 0 {
@@ -101,7 +100,9 @@ func (a *App) emitBatch(batch []LogLine) {
 		if end > len(batch) {
 			end = len(batch)
 		}
-		runtime.EventsEmit(a.ctx, "log:batch", batch[i:end])
+		chunk := batch[i:end]
+		runtime.EventsEmit(a.ctx, "log:batch", chunk)
+		a.plugins.dispatchBatch(chunk)
 	}
 }
 

@@ -78,6 +78,72 @@ readline.createInterface({ input: process.stdin }).on('line', () => {
 	}
 }
 
+func TestPluginReceivesBacklogBeforeStartup(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not on PATH")
+	}
+
+	dir := t.TempDir()
+	outfile := filepath.Join(dir, "out")
+	script := filepath.Join(dir, "tee.js")
+	js := `const fs = require('node:fs');
+const rl = require('node:readline').createInterface({ input: process.stdin });
+rl.on('line', (l) => {
+  const log = JSON.parse(l);
+  fs.appendFileSync(process.argv[2], log.text + '\n');
+});`
+	if err := os.WriteFile(script, []byte(js), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp(startInfo{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pm := &pluginManager{cancel: cancel}
+	p, err := launchPlugin(ctx, pluginSpec{
+		name: "tee.js",
+		cmd:  "node",
+		args: []string{script, outfile},
+	}, &pm.wg)
+	if err != nil {
+		t.Fatalf("launchPlugin: %v", err)
+	}
+	pm.plugins = append(pm.plugins, p)
+	app.plugins = pm
+
+	// Pre-Ready: these land in app.buf; plugins see nothing until a drain/emit.
+	app.push("stdout", "pre-1")
+	app.push("stdout", "pre-2")
+
+	// Mirror emitLoop's post-Ready drain + per-batch dispatch.
+	pm.dispatchBatch(app.drain())
+
+	// Post-Ready: new lines also accumulate in buf until the next tick drains.
+	app.push("stdout", "post-1")
+	app.push("stdout", "post-2")
+	pm.dispatchBatch(app.drain())
+
+	want := "pre-1\npre-2\npost-1\npost-2\n"
+	deadline := time.Now().Add(2 * time.Second)
+	var got string
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(outfile); err == nil {
+			got = string(data)
+			if got == want {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got != want {
+		t.Fatalf("plugin missed backlog or reordered\nwant:\n%s\ngot:\n%s", want, got)
+	}
+
+	_ = p.stdin.Close()
+	pm.wg.Wait()
+}
+
 func TestResolvePluginJS(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"a.js", "b.mjs", "c.cjs"} {
