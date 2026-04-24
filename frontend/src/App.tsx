@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 import { StartInfo, Ready } from '../wailsjs/go/main/App'
 import { DedupeIndex, LogLine, ServerLogLine } from './dedupe'
+import { JsonPretty, tryParseJson } from './JsonPretty'
 import './App.css'
 
 type StartInfoT = { mode: string; command?: string[] }
@@ -107,6 +108,7 @@ function App() {
     getScrollElement: () => parentRef.current,
     estimateSize: () => 20,
     overscan: 30,
+    measureElement: (el) => el.getBoundingClientRect().height,
   })
 
   useEffect(() => {
@@ -197,9 +199,12 @@ function App() {
             {virtualizer.getVirtualItems().map(v => {
               const line = filtered[v.index]
               const dupCount = dedupe ? dedupeIdxRef.current.countFor(line) : 1
+              const isJson = tryParseJson(line.text) !== null
               return (
                 <div
                   key={v.key}
+                  data-index={v.index}
+                  ref={virtualizer.measureElement}
                   className={`log-row log-row-${line.source}`}
                   style={{
                     position: 'absolute',
@@ -207,13 +212,15 @@ function App() {
                     left: 0,
                     right: 0,
                     transform: `translateY(${v.start}px)`,
-                    height: v.size,
                   }}
                 >
                   <span className="seq">{line.seq}</span>
                   {dupCount > 1 && <span className="dup-count" title={`${dupCount} occurrences`}>×{dupCount}</span>}
                   <span className="log-text">
-                    <Highlighted text={line.text} matcher={matcher} />
+                    {isJson
+                      ? <JsonPretty text={line.text} />
+                      : <Highlighted text={line.text} matcher={matcher} />
+                    }
                   </span>
                 </div>
               )
