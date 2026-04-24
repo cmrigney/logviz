@@ -269,9 +269,10 @@ func (pm *pluginManager) dispatchBatch(lines []LogLine) {
 		return
 	}
 	pm.mu.Lock()
-	plugins := pm.plugins
+	snapshot := make([]*plugin, len(pm.plugins))
+	copy(snapshot, pm.plugins)
 	pm.mu.Unlock()
-	for _, p := range plugins {
+	for _, p := range snapshot {
 		for _, line := range lines {
 			select {
 			case p.ch <- line:
