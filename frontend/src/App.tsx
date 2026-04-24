@@ -30,6 +30,7 @@ function App() {
   const [paused, setPaused] = useState(false)
   const [autoscroll, setAutoscroll] = useState(true)
   const [dedupe, setDedupe] = useState(false)
+  const [prettyJson, setPrettyJson] = useState(true)
   const [sources, setSources] = useState<Record<string, boolean>>({
     stdout: true, stderr: true, stdin: true,
   })
@@ -110,7 +111,7 @@ function App() {
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (i) => filtered[i]?.parsed !== null ? 120 : 20,
+    estimateSize: (i) => prettyJson && filtered[i]?.parsed !== null ? 120 : 20,
     overscan: 30,
     // Fix 3: no custom measureElement option — use default ResizeObserver/offsetHeight
   })
@@ -179,6 +180,10 @@ function App() {
           <input type="checkbox" checked={dedupe} onChange={e => setDedupe(e.target.checked)} />
           dedupe
         </label>
+        <label>
+          <input type="checkbox" checked={prettyJson} onChange={e => setPrettyJson(e.target.checked)} />
+          pretty JSON
+        </label>
         <span className="stats">
           <span className="mode-badge">{startInfo.mode}</span>
           {' '}
@@ -220,7 +225,7 @@ function App() {
                   <span className="seq">{line.seq}</span>
                   {dupCount > 1 && <span className="dup-count" title={`${dupCount} occurrences`}>×{dupCount}</span>}
                   <span className="log-text">
-                    {parsed !== null
+                    {prettyJson && parsed !== null
                       ? (
                         <>
                           <JsonPretty parsed={parsed} />
