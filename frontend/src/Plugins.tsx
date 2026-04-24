@@ -9,7 +9,7 @@ interface PluginsModalProps {
   onClose: () => void
 }
 
-// Local editable state for one plugin's config.
+// Local editable state for one plugin's config, keyed by plugin ID.
 interface PluginEdit {
   config: Record<string, string>
   dirty: boolean
@@ -17,6 +17,7 @@ interface PluginEdit {
 
 export function PluginsModal({ onClose }: PluginsModalProps) {
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
+  // edits is keyed by plugin.id (full path), not plugin.name.
   const [edits, setEdits] = useState<Record<string, PluginEdit>>({})
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -26,11 +27,12 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
       const list = await ListPlugins()
       setPlugins(list ?? [])
       // Initialize edits for plugins that don't have local edits yet.
+      // Key by id to avoid collisions between same-named plugins in different dirs.
       setEdits(prev => {
         const next = { ...prev }
         for (const p of (list ?? [])) {
-          if (!next[p.name]) {
-            next[p.name] = { config: { ...(p.config ?? {}) }, dirty: false }
+          if (!next[p.id]) {
+            next[p.id] = { config: { ...(p.config ?? {}) }, dirty: false }
           }
         }
         return next
@@ -47,76 +49,77 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
     fetchPlugins()
   }, [fetchPlugins])
 
-  const handleToggle = async (name: string, enabled: boolean) => {
+  // All API calls use plugin.id (full path), not plugin.name.
+  const handleToggle = async (id: string, enabled: boolean) => {
     try {
       setError(null)
-      await SetPluginEnabled(name, enabled)
+      await SetPluginEnabled(id, enabled)
       await fetchPlugins()
     } catch (e) {
       setError(String(e))
     }
   }
 
-  const handleSave = async (name: string) => {
-    const edit = edits[name]
+  const handleSave = async (id: string) => {
+    const edit = edits[id]
     if (!edit) return
     try {
       setError(null)
-      await SetPluginConfig(name, edit.config)
+      await SetPluginConfig(id, edit.config)
       await fetchPlugins()
       setEdits(prev => ({
         ...prev,
-        [name]: { ...prev[name], dirty: false },
+        [id]: { ...prev[id], dirty: false },
       }))
     } catch (e) {
       setError(String(e))
     }
   }
 
-  const handleRevert = (name: string, plugin: PluginInfo) => {
+  const handleRevert = (id: string, plugin: PluginInfo) => {
     setEdits(prev => ({
       ...prev,
-      [name]: { config: { ...(plugin.config ?? {}) }, dirty: false },
+      [id]: { config: { ...(plugin.config ?? {}) }, dirty: false },
     }))
   }
 
-  const handleRestart = async (name: string) => {
+  const handleRestart = async (id: string) => {
     try {
       setError(null)
-      await RestartPlugin(name)
+      await RestartPlugin(id)
       await fetchPlugins()
     } catch (e) {
       setError(String(e))
     }
   }
 
-  const setConfigField = (name: string, key: string, value: string) => {
+  const setConfigField = (id: string, key: string, value: string) => {
     setEdits(prev => ({
       ...prev,
-      [name]: {
-        config: { ...(prev[name]?.config ?? {}), [key]: value },
+      [id]: {
+        config: { ...(prev[id]?.config ?? {}), [key]: value },
         dirty: true,
       },
     }))
   }
 
-  const addConfigKey = (name: string) => {
+  const addConfigKey = (id: string) => {
     const key = prompt('New config key:')
     if (!key) return
     setEdits(prev => ({
       ...prev,
-      [name]: {
-        config: { ...(prev[name]?.config ?? {}), [key]: '' },
+      [id]: {
+        config: { ...(prev[id]?.config ?? {}), [key]: '' },
         dirty: true,
       },
     }))
   }
 
-  const removeConfigKey = (name: string, key: string) => {
+  const removeConfigKey = (id: string, key: string) => {
     setEdits(prev => {
-      const cfg = { ...(prev[name]?.config ?? {}) }
+      const cfg = { ...(prev[id]?.config ?? {}) }
       delete cfg[key]
-      return { ...prev, [name]: { config: cfg, dirty: true } }
+      return { ...prev, [id]: { config: cfg, dirty: true } }
     })
   }
 
@@ -136,7 +139,8 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
 
         <div className="plugins-list">
           {plugins.map(plugin => {
-            const edit = edits[plugin.name] ?? { config: {}, dirty: false }
+            // Use plugin.id as the React key and the map key for edits.
+            const edit = edits[plugin.id] ?? { config: {}, dirty: false }
             const schema = plugin.configSchema ?? {}
             const schemaKeys = Object.keys(schema)
             const isLegacy = plugin.protocol < 1
@@ -146,9 +150,10 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
             const advancedKeys = Object.keys(edit.config).filter(k => !schema[k])
 
             return (
-              <div key={plugin.name} className="plugin-card">
+              <div key={plugin.id} className="plugin-card">
                 <div className="plugin-card-header">
                   <div className="plugin-name-row">
+                    {/* Display the human-readable basename, not the full path */}
                     <span className="plugin-name">{plugin.name}</span>
                     <span className={`plugin-status ${plugin.running ? 'running' : 'stopped'}`}>
                       {plugin.running ? '● running' : '○ stopped'}
@@ -159,13 +164,13 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
                       <input
                         type="checkbox"
                         checked={plugin.enabled}
-                        onChange={e => handleToggle(plugin.name, e.target.checked)}
+                        onChange={e => handleToggle(plugin.id, e.target.checked)}
                       />
                       {plugin.enabled ? 'enabled' : 'disabled'}
                     </label>
                     <button
                       className="plugin-restart-btn"
-                      onClick={() => handleRestart(plugin.name)}
+                      onClick={() => handleRestart(plugin.id)}
                       title="Restart plugin"
                     >
                       restart
@@ -194,7 +199,7 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
                                   className="plugin-field-input"
                                   value={edit.config[key] ?? field.default ?? ''}
                                   placeholder={field.default ?? ''}
-                                  onChange={e => setConfigField(plugin.name, key, e.target.value)}
+                                  onChange={e => setConfigField(plugin.id, key, e.target.value)}
                                 />
                               </label>
                               {field.description && (
@@ -217,11 +222,11 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
                               type="text"
                               className="plugin-field-input"
                               value={edit.config[key] ?? ''}
-                              onChange={e => setConfigField(plugin.name, key, e.target.value)}
+                              onChange={e => setConfigField(plugin.id, key, e.target.value)}
                             />
                             <button
                               className="plugin-remove-key"
-                              onClick={() => removeConfigKey(plugin.name, key)}
+                              onClick={() => removeConfigKey(plugin.id, key)}
                               title="Remove key"
                             >
                               ×
@@ -230,7 +235,7 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
                         ))}
                         <button
                           className="plugin-add-key"
-                          onClick={() => addConfigKey(plugin.name)}
+                          onClick={() => addConfigKey(plugin.id)}
                         >
                           + add key
                         </button>
@@ -241,14 +246,14 @@ export function PluginsModal({ onClose }: PluginsModalProps) {
                       <button
                         className="plugin-save-btn"
                         disabled={!edit.dirty}
-                        onClick={() => handleSave(plugin.name)}
+                        onClick={() => handleSave(plugin.id)}
                       >
                         Save
                       </button>
                       <button
                         className="plugin-revert-btn"
                         disabled={!edit.dirty}
-                        onClick={() => handleRevert(plugin.name, plugin)}
+                        onClick={() => handleRevert(plugin.id, plugin)}
                       >
                         Revert
                       </button>

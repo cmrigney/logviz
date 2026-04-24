@@ -44,7 +44,10 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 20, G: 22, B: 28, A: 1},
 		OnStartup:        app.startup,
-		OnShutdown:       func(context.Context) { app.plugins.stop() },
+		// Fire-and-forget: pm.stop() waits up to 2s for subprocesses to exit,
+		// which would otherwise block the Wails shutdown path and delay window
+		// close. The OS will reap any still-running children when the parent exits.
+		OnShutdown: func(context.Context) { go app.plugins.stop() },
 		Bind: []interface{}{
 			app,
 		},

@@ -541,7 +541,9 @@ readline.createInterface({ input: process.stdin }).on('line', (raw) => {
 	app.plugins = pm
 
 	initialCfg := map[string]string{"key": "initial"}
+	specID := filepath.Join(dir, "configtest.js") // stable id = absolute path
 	spec := pluginSpec{
+		id:       specID,
 		name:     "configtest.js",
 		cmd:      "node",
 		args:     []string{script, helloLog, pidFile},
@@ -577,7 +579,7 @@ readline.createInterface({ input: process.stdin }).on('line', (raw) => {
 	// Point configPath() at the temp dir so it never touches real user config.
 	configPathOverride = filepath.Join(dir, "plugins.json")
 	t.Cleanup(func() { configPathOverride = "" })
-	if err := app.SetPluginConfig("configtest.js", map[string]string{"key": "updated"}); err != nil {
+	if err := app.SetPluginConfig(specID, map[string]string{"key": "updated"}); err != nil {
 		t.Fatalf("SetPluginConfig: %v", err)
 	}
 

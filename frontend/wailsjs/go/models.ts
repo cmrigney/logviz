@@ -18,6 +18,7 @@ export namespace main {
 	}
 
 	export class PluginInfo {
+	    id: string;
 	    name: string;
 	    enabled: boolean;
 	    running: boolean;
@@ -32,6 +33,7 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
 	        this.running = source["running"];

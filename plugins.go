@@ -22,8 +22,16 @@ type pluginManifest struct {
 }
 
 // pluginSpec holds all information needed to launch a plugin.
+//
+// id is the stable, unique key for this plugin — the absolute path of the
+// plugin file. It is used as the map key in the config file and in all API
+// calls so that two plugins with the same filename in different directories
+// do not collide.
+//
+// name is the display-only basename (e.g. "foo.js").
 type pluginSpec struct {
-	name         string
+	id           string // absolute path — stable unique key
+	name         string // basename — display only
 	cmd          string
 	args         []string
 	enabled      bool
@@ -35,7 +43,8 @@ type pluginSpec struct {
 
 // plugin is a running plugin subprocess.
 type plugin struct {
-	name       string
+	id         string // mirrors spec.id
+	name       string // mirrors spec.name (display)
 	ch         chan LogLine
 	cmd        *exec.Cmd
 	stdin      io.WriteCloser
@@ -64,7 +73,7 @@ func startPlugins(ctx context.Context) *pluginManager {
 		cfg = &pluginConfigFile{Version: 1, Plugins: make(map[string]pluginConfigEntry)}
 	}
 	for i, spec := range specs {
-		entry := cfg.entryFor(spec.name)
+		entry := cfg.entryFor(spec.id)
 		specs[i].enabled = entry.Enabled
 		specs[i].config = entry.Config
 	}
@@ -105,22 +114,29 @@ func scanPluginDir(dir string) []pluginSpec {
 	if err != nil {
 		return nil
 	}
+	// Resolve dir to an absolute path so that spec.id values are stable
+	// regardless of the working directory at discovery time.
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
 	var specs []pluginSpec
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") || e.IsDir() {
 			continue
 		}
-		// Skip manifest files — they are handled by resolvePlugin.
+		// Skip manifest files — they are handled alongside their plugin file.
 		if strings.HasSuffix(name, ".json") {
 			continue
 		}
-		spec, ok := resolvePlugin(filepath.Join(dir, name), name, e)
+		absPath := filepath.Join(absDir, name)
+		spec, ok := resolvePlugin(absPath, name, e)
 		if !ok {
 			continue
 		}
 		// Attempt to load sibling manifest.
-		manifestPath := filepath.Join(dir, name+".json")
+		manifestPath := filepath.Join(absDir, name+".json")
 		if data, err := os.ReadFile(manifestPath); err == nil {
 			var m pluginManifest
 			if jsonErr := json.Unmarshal(data, &m); jsonErr == nil {
@@ -138,17 +154,19 @@ func scanPluginDir(dir string) []pluginSpec {
 	return specs
 }
 
-func resolvePlugin(path, name string, e os.DirEntry) (pluginSpec, bool) {
+// resolvePlugin builds a pluginSpec for the file at absPath with basename name.
+// absPath must already be absolute.
+func resolvePlugin(absPath, name string, e os.DirEntry) (pluginSpec, bool) {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".js", ".mjs", ".cjs":
-		return pluginSpec{name: name, cmd: "node", args: []string{path}}, true
+		return pluginSpec{id: absPath, name: name, cmd: "node", args: []string{absPath}}, true
 	}
 	info, err := e.Info()
 	if err != nil {
 		return pluginSpec{}, false
 	}
 	if info.Mode()&0o111 != 0 {
-		return pluginSpec{name: name, cmd: path}, true
+		return pluginSpec{id: absPath, name: name, cmd: absPath}, true
 	}
 	return pluginSpec{}, false
 }
@@ -170,6 +188,7 @@ func launchPlugin(ctx context.Context, spec pluginSpec, wg *sync.WaitGroup) (*pl
 		return nil, err
 	}
 	p := &plugin{
+		id:       spec.id,
 		name:     spec.name,
 		ch:       make(chan LogLine, 1024),
 		cmd:      cmd,
@@ -233,7 +252,7 @@ func writePlugin(ctx context.Context, p *plugin) {
 		hello := envelopeHello{
 			Type:     "hello",
 			Protocol: p.protocol,
-			Plugin:   p.name,
+			Plugin:   p.name, // send display name in hello, not path
 			Config:   cfg,
 		}
 		if err := enc.Encode(hello); err != nil {
@@ -323,21 +342,22 @@ func (pm *pluginManager) stopPlugin(p *plugin) {
 	}
 }
 
-// restartPlugin stops a named plugin (if running) and relaunches it if enabled.
-// The spec in allSpecs is used (which reflects any config changes).
-func (pm *pluginManager) restartPlugin(name string) error {
+// restartPlugin stops the plugin with the given id (if running) and relaunches
+// it if enabled. The spec in allSpecs is used (which reflects any config changes).
+// id is the full absolute path of the plugin file.
+func (pm *pluginManager) restartPlugin(id string) error {
 	pm.mu.Lock()
-	// Find the spec.
+	// Find the spec by id.
 	var spec *pluginSpec
 	for i := range pm.allSpecs {
-		if pm.allSpecs[i].name == name {
+		if pm.allSpecs[i].id == id {
 			spec = &pm.allSpecs[i]
 			break
 		}
 	}
 	if spec == nil {
 		pm.mu.Unlock()
-		return fmt.Errorf("plugin %q not found", name)
+		return fmt.Errorf("plugin %q not found", id)
 	}
 	specCopy := *spec
 
@@ -346,7 +366,7 @@ func (pm *pluginManager) restartPlugin(name string) error {
 	var existing *plugin
 	newPlugins := make([]*plugin, 0, len(pm.plugins))
 	for _, p := range pm.plugins {
-		if p.name == name {
+		if p.id == id {
 			existing = p
 		} else {
 			newPlugins = append(newPlugins, p)
@@ -361,18 +381,18 @@ func (pm *pluginManager) restartPlugin(name string) error {
 	}
 
 	// Relaunch if enabled. Guard against a concurrent restartPlugin call that
-	// may have already added a new instance for this name.
+	// may have already added a new instance for this id.
 	if specCopy.enabled {
 		p, err := launchPlugin(pm.ctx, specCopy, &pm.wg)
 		if err != nil {
-			return fmt.Errorf("relaunch plugin %q: %w", name, err)
+			return fmt.Errorf("relaunch plugin %q: %w", id, err)
 		}
 		pm.mu.Lock()
 		// Double-launch guard: if another goroutine already added an instance
-		// for this name while we were launching, discard ours.
+		// for this id while we were launching, discard ours.
 		alreadyPresent := false
 		for _, existing := range pm.plugins {
-			if existing.name == name {
+			if existing.id == id {
 				alreadyPresent = true
 				break
 			}
@@ -389,12 +409,12 @@ func (pm *pluginManager) restartPlugin(name string) error {
 	return nil
 }
 
-// isRunning reports whether a plugin with the given name is currently running.
-func (pm *pluginManager) isRunning(name string) bool {
+// isRunning reports whether the plugin with the given id is currently running.
+func (pm *pluginManager) isRunning(id string) bool {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	for _, p := range pm.plugins {
-		if p.name == name {
+		if p.id == id {
 			select {
 			case <-p.done:
 				return false
