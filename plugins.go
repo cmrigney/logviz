@@ -61,10 +61,7 @@ func startPlugins(ctx context.Context) *pluginManager {
 	cfg, err := loadPluginConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[plugin-config] load error: %v\n", err)
-		cfg, _ = loadPluginConfig() // retry or use zero value
-		if cfg == nil {
-			cfg = &pluginConfigFile{Version: 1, Plugins: make(map[string]pluginConfigEntry)}
-		}
+		cfg = &pluginConfigFile{Version: 1, Plugins: make(map[string]pluginConfigEntry)}
 	}
 	for i, spec := range specs {
 		entry := cfg.entryFor(spec.name)
@@ -344,9 +341,10 @@ func (pm *pluginManager) restartPlugin(name string) error {
 	}
 	specCopy := *spec
 
-	// Find and remove existing running plugin.
+	// Find and remove the existing running plugin, building a fresh backing
+	// array so that any snapshot already held by dispatchBatch is unaffected.
 	var existing *plugin
-	newPlugins := pm.plugins[:0:len(pm.plugins)]
+	newPlugins := make([]*plugin, 0, len(pm.plugins))
 	for _, p := range pm.plugins {
 		if p.name == name {
 			existing = p
@@ -362,15 +360,31 @@ func (pm *pluginManager) restartPlugin(name string) error {
 		pm.stopPlugin(existing)
 	}
 
-	// Relaunch if enabled.
+	// Relaunch if enabled. Guard against a concurrent restartPlugin call that
+	// may have already added a new instance for this name.
 	if specCopy.enabled {
 		p, err := launchPlugin(pm.ctx, specCopy, &pm.wg)
 		if err != nil {
 			return fmt.Errorf("relaunch plugin %q: %w", name, err)
 		}
 		pm.mu.Lock()
-		pm.plugins = append(pm.plugins, p)
-		pm.mu.Unlock()
+		// Double-launch guard: if another goroutine already added an instance
+		// for this name while we were launching, discard ours.
+		alreadyPresent := false
+		for _, existing := range pm.plugins {
+			if existing.name == name {
+				alreadyPresent = true
+				break
+			}
+		}
+		if alreadyPresent {
+			pm.mu.Unlock()
+			// Cleanly discard the redundant process we just started.
+			pm.stopPlugin(p)
+		} else {
+			pm.plugins = append(pm.plugins, p)
+			pm.mu.Unlock()
+		}
 	}
 	return nil
 }

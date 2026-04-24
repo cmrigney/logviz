@@ -266,11 +266,10 @@ func TestPluginManifestLoading(t *testing.T) {
 func TestPluginConfigFileRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 
-	// Override configPath by temporarily using an environment variable trick:
-	// we test the functions directly, so we'll call savePluginConfig with a
-	// known path. Since configPath() uses os.UserConfigDir, we temporarily
-	// set XDG_CONFIG_HOME on Linux so our temp dir is used.
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	// Point configPath() at a temp file so the test never touches the real
+	// user config directory on any platform (XDG_CONFIG_HOME is Linux-only).
+	configPathOverride = filepath.Join(dir, "plugins.json")
+	t.Cleanup(func() { configPathOverride = "" })
 
 	// Missing file → empty struct, no error.
 	cfg, err := loadPluginConfig()
@@ -575,8 +574,9 @@ readline.createInterface({ input: process.stdin }).on('line', (raw) => {
 	firstPID := string(firstPIDData)
 
 	// Call SetPluginConfig with a new config.
-	// We override XDG_CONFIG_HOME so it doesn't write to the real config.
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	// Point configPath() at the temp dir so it never touches real user config.
+	configPathOverride = filepath.Join(dir, "plugins.json")
+	t.Cleanup(func() { configPathOverride = "" })
 	if err := app.SetPluginConfig("configtest.js", map[string]string{"key": "updated"}); err != nil {
 		t.Fatalf("SetPluginConfig: %v", err)
 	}

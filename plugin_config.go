@@ -27,8 +27,15 @@ type pluginConfigEntry struct {
 	Config  map[string]string `json:"config"`
 }
 
+// configPathOverride, when non-empty, is returned by configPath() instead of
+// the platform default. Set this in tests to avoid touching real user config.
+var configPathOverride string
+
 // configPath returns the path to the unified plugin config file.
 func configPath() string {
+	if configPathOverride != "" {
+		return configPathOverride
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		// Fallback to ~/.config if UserConfigDir fails.
