@@ -8,7 +8,7 @@ export function Ready():Promise<void>;
 
 export function RestartPlugin(arg1:string):Promise<void>;
 
-export function SetPluginConfig(arg1:string,arg2:{[key: string]: string}):Promise<void>;
+export function SetPluginConfig(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SetPluginEnabled(arg1:string,arg2:boolean):Promise<void>;
 
