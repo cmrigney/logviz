@@ -13,6 +13,9 @@ type Matcher =
   | { kind: 'substr'; needle: string; caseSensitive: boolean }
   | null
 
+// Fix 6: type for memoized filtered rows that carry pre-parsed JSON
+type FilteredRow = { line: LogLine; parsed: unknown }
+
 const MAX_LINES = 500_000
 const SOURCES = ['stdout', 'stderr', 'stdin'] as const
 
@@ -73,11 +76,12 @@ function App() {
     return [{ kind: 'substr', needle: caseSensitive ? query : query.toLowerCase(), caseSensitive }, null]
   }, [query, regex, caseSensitive])
 
-  const filtered = useMemo(() => {
+  // Fix 6: parse JSON once here, not on every scroll in the render map
+  const filtered = useMemo<FilteredRow[]>(() => {
     void tick
     const ring = ringRef.current
     const dedupeIdx = dedupeIdxRef.current
-    const out: LogLine[] = []
+    const out: FilteredRow[] = []
     for (const line of ring) {
       if (!sources[line.source]) continue
       if (dedupe && !dedupeIdx.isRepresentative(line)) continue
@@ -90,7 +94,7 @@ function App() {
           if (!t.includes(matcher.needle)) continue
         }
       }
-      out.push(line)
+      out.push({ line, parsed: tryParseJson(line.text) })
     }
     return out
   }, [tick, matcher, sources, dedupe])
@@ -106,9 +110,9 @@ function App() {
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 20,
+    estimateSize: () => 120,  // Fix 9: better estimate for multi-line JSON rows
     overscan: 30,
-    measureElement: (el) => el.getBoundingClientRect().height,
+    // Fix 3: no custom measureElement option — use default ResizeObserver/offsetHeight
   })
 
   useEffect(() => {
@@ -197,9 +201,8 @@ function App() {
         <div ref={parentRef} className="log-list">
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map(v => {
-              const line = filtered[v.index]
+              const { line, parsed } = filtered[v.index]
               const dupCount = dedupe ? dedupeIdxRef.current.countFor(line) : 1
-              const isJson = tryParseJson(line.text) !== null
               return (
                 <div
                   key={v.key}
@@ -217,8 +220,9 @@ function App() {
                   <span className="seq">{line.seq}</span>
                   {dupCount > 1 && <span className="dup-count" title={`${dupCount} occurrences`}>×{dupCount}</span>}
                   <span className="log-text">
-                    {isJson
-                      ? <JsonPretty text={line.text} />
+                    {/* Fix 1+2: use pre-parsed value; fall back to Highlighted when filter is active */}
+                    {parsed !== null && matcher === null
+                      ? <JsonPretty parsed={parsed} />
                       : <Highlighted text={line.text} matcher={matcher} />
                     }
                   </span>
