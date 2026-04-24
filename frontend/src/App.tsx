@@ -220,9 +220,17 @@ function App() {
                   <span className="seq">{line.seq}</span>
                   {dupCount > 1 && <span className="dup-count" title={`${dupCount} occurrences`}>×{dupCount}</span>}
                   <span className="log-text">
-                    {/* Fix 1+2: use pre-parsed value; fall back to Highlighted when filter is active */}
-                    {parsed !== null && matcher === null
-                      ? <JsonPretty parsed={parsed} />
+                    {parsed !== null
+                      ? (
+                        <>
+                          <JsonPretty parsed={parsed} />
+                          {matcher !== null && (
+                            <div className="json-match-strip">
+                              <Highlighted text={line.text} matcher={matcher} />
+                            </div>
+                          )}
+                        </>
+                      )
                       : <Highlighted text={line.text} matcher={matcher} />
                     }
                   </span>

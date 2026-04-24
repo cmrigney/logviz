@@ -149,3 +149,17 @@ mark {
 .jp-string  { color: #a8d8a8; }
 .jp-keyword { color: #e8b86d; }
 .jp-punct   { color: #888; }
+
+/* strip shown below JSON pretty-print when a filter is active */
+.json-match-strip {
+  margin-top: 2px;
+  padding: 1px 6px;
+  background: rgba(214, 192, 123, 0.08);
+  border-left: 2px solid #d6c07b;
+  color: #aaa;
+  white-space: pre;
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
