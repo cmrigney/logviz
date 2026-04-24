@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
+import React, { useEffect, useMemo, useRef, useState, ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { EventsOn, EventsOff } from '../wailsjs/runtime/runtime'
 import { StartInfo, Ready } from '../wailsjs/go/main/App'
@@ -110,7 +110,7 @@ function App() {
   const virtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 120,  // Fix 9: better estimate for multi-line JSON rows
+    estimateSize: (i) => filtered[i]?.parsed !== null ? 120 : 20,
     overscan: 30,
     // Fix 3: no custom measureElement option — use default ResizeObserver/offsetHeight
   })

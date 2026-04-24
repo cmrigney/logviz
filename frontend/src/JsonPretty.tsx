@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import React, { ReactNode } from 'react'
 
 /**
  * Renders a pre-parsed JSON value as a syntax-highlighted <pre> block.
@@ -132,7 +132,7 @@ export function JsonPretty({ parsed }: { parsed: unknown }) {
   return (
     <pre className="jp-pre">
       {(nodes.flat(2) as ReactNode[]).map((n, i) =>
-        n == null ? null : (typeof n === 'string' ? n : <span key={i}>{n}</span>)
+        n == null ? null : (typeof n === 'string' ? n : React.cloneElement(n as React.ReactElement, { key: i }))
       )}
     </pre>
   )
