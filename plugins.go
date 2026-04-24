@@ -306,12 +306,22 @@ func (pm *pluginManager) stop() {
 	pm.cancel()
 }
 
-// stopPlugin closes a single plugin's stdin and waits for it to exit (up to 2s).
+// stopPlugin closes a single plugin's stdin and waits up to 2 s for it to exit.
+// If the process has not exited by then it is forcibly killed, ensuring the old
+// process is always gone before a replacement is launched.
 func (pm *pluginManager) stopPlugin(p *plugin) {
 	_ = p.stdin.Close()
 	select {
 	case <-p.done:
+		// exited cleanly
 	case <-time.After(2 * time.Second):
+		// Timed out — kill the process so it cannot outlive this call.
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		// Wait for done to be closed (the Wait goroutine will close it promptly
+		// after Kill returns an error, which is expected and ignored there).
+		<-p.done
 	}
 }
 
